@@ -55,15 +55,6 @@
         .dash {
             color: #6c757d;
         }
-        .progress {
-            height: 20px;
-            margin-top: 10px;
-            background-color: #e9ecef;
-            border-radius: 5px;
-        }
-        .progress-bar {
-            background-color: #28a745;
-        }
         .api-key-item {
             display: flex;
             margin-bottom: 10px;
@@ -98,6 +89,35 @@
             min-height: 100px;
             resize: vertical;
         }
+        .missing-subtitles-container {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ced4da;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            margin-top: 20px;
+        }
+        .missing-subtitle-item {
+            background-color: #d9d9d9;
+            padding: 10px;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            display: flex;
+            flex-direction: column;
+        }
+        .missing-subtitle-number {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .translation-input {
+            margin-top: 5px;
+        }
+        .missing-progress-text {
+            color: #6c757d;
+            font-size: 1rem;
+            margin-bottom: 5px;
+        }
     </style>
 </head>
 <body>
@@ -124,7 +144,7 @@
                         <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
                         <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
                         <option value="gemini-1.0-pro">Gemini 1.0 Pro</option>
-                        <option value="gemini-2-flash">Gemini 2 Flash</option> <!-- اضافه کردن Gemini 2 Flash -->
+                        <option value="gemini-2-flash">Gemini 2 Flash</option>
                     </select>
                 </div>
             </div>
@@ -170,10 +190,9 @@
             <button class="btn btn-success btn-lg mt-2" id="startTranslationBtn" disabled>شروع ترجمه</button>
         </div>
 
-        <div class="progress mb-3" id="progressContainer" style="display: none;">
-            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" id="progressBar" style="width: 0%"></div>
+        <div class="text-center mb-3" id="progressText" style="display: none;">
+            Translation Progress: <span id="progressPercentage">0</span>% - Time Elapsed: <span id="timeElapsed">0</span> seconds
         </div>
-        <div class="text-center mb-3" id="progressText" style="display: none;">Translation Progress: <span id="progressPercentage">0</span>%</div>
 
         <div class="row mb-3">
             <div class="col-md-12 text-end">
@@ -193,9 +212,27 @@
         </div>
 
         <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h4>Missing Translations</h4>
+                        <span class="text-muted" id="missingCount">0 missing subtitles</span>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label me-2">Missing Batch Size:</label>
+                        <input type="number" class="form-control" id="missingBatchSizeInput" value="3" min="1" max="1000" style="width: 100px;">
+                    </div>
+                </div>
+                <div class="missing-progress-text" id="missingProgressText" style="display: none;">Missing Translation Progress: <span id="missingProgressPercentage">0</span>%</div>
+                <div class="missing-subtitles-container" id="missingSubtitles"></div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
             <div class="col-md-6">
                 <button class="btn btn-danger btn-lg w-75" id="stopBtn" disabled>Stop</button>
                 <button class="btn btn-primary btn-sm w-20 ms-2" id="translateMissingBtn" disabled>Translate Missing</button>
+                <span id="clickCount" class="ms-2" style="font-size: 0.8rem; color: #6c757d;">(0)</span>
             </div>
             <div class="col-md-6">
                 <button class="btn btn-primary btn-lg w-100" id="saveBtn" disabled>Save Translated Subtitles</button>
@@ -233,14 +270,19 @@
             const startTranslationBtn = document.getElementById('startTranslationBtn');
             const originalSubtitles = document.getElementById('originalSubtitles');
             const translatedSubtitles = document.getElementById('translatedSubtitles');
-            const progressContainer = document.getElementById('progressContainer');
-            const progressBar = document.getElementById('progressBar');
+            const missingSubtitles = document.getElementById('missingSubtitles');
             const progressText = document.getElementById('progressText');
             const progressPercentage = document.getElementById('progressPercentage');
+            const timeElapsed = document.getElementById('timeElapsed');
             const saveBtn = document.getElementById('saveBtn');
             const stopBtn = document.getElementById('stopBtn');
             const translateMissingBtn = document.getElementById('translateMissingBtn');
+            const clickCount = document.getElementById('clickCount');
             const batchSizeInput = document.getElementById('batchSizeInput');
+            const missingBatchSizeInput = document.getElementById('missingBatchSizeInput');
+            const missingProgressText = document.getElementById('missingProgressText');
+            const missingProgressPercentage = document.getElementById('missingProgressPercentage');
+            const missingCount = document.getElementById('missingCount');
             const toggleEditMode = document.getElementById('toggleEditMode');
             
             let subtitles = [];
@@ -249,6 +291,7 @@
             let currentApiKeyIndex = 0;
             let editMode = false;
             let currentIndex = 0;
+            let missingClickCount = 0; // شمارش تعداد کلیک‌ها برای Translate Missing
 
             selectFileBtn.addEventListener('click', () => {
                 srtFileInput.click();
@@ -297,8 +340,11 @@
             function displayOriginalSubtitles() {
                 originalSubtitles.innerHTML = '';
                 translatedSubtitles.innerHTML = '';
+                missingSubtitles.innerHTML = '';
                 translatedSubs = [];
                 currentIndex = 0;
+                missingClickCount = 0; // ریست کردن تعداد کلیک‌ها
+                clickCount.textContent = '(0)';
                 
                 subtitles.forEach(sub => {
                     const subtitleItem = document.createElement('div');
@@ -364,21 +410,28 @@
                 const model = document.getElementById('modelSelect').value;
                 const targetLang = document.getElementById('targetLanguage').value;
                 const translationSettings = document.getElementById('translateSettings').value;
-                const batchSize = parseInt(batchSizeInput.value) || 50; // گرفتن مقدار از ورودی کاربر
+                const batchSize = parseInt(batchSizeInput.value) || 50;
                 
                 isTranslating = true;
-                progressContainer.style.display = 'block';
                 progressText.style.display = 'block';
                 stopBtn.disabled = false;
                 startTranslationBtn.disabled = true;
                 stopBtn.textContent = 'Stop';
                 
                 const total = subtitles.length;
+                let mainProgress = 0;
+                let startTime = Date.now();
+                let timerInterval = setInterval(() => {
+                    let elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                    timeElapsed.textContent = elapsedSeconds;
+                }, 1000);
                 
                 function updateProgress() {
                     const percent = Math.round((currentIndex / total) * 100);
-                    progressBar.style.width = `${percent}%`;
-                    progressPercentage.textContent = percent;
+                    if (percent !== mainProgress) {
+                        mainProgress = percent;
+                        progressPercentage.textContent = percent;
+                    }
                 }
 
                 async function translateNextBatch() {
@@ -388,6 +441,8 @@
                             translateMissingBtn.disabled = false;
                             stopBtn.textContent = 'Stop';
                             startTranslationBtn.disabled = false;
+                            displayMissingSubtitles();
+                            clearInterval(timerInterval);
                         }
                         isTranslating = false;
                         return;
@@ -419,7 +474,8 @@
 
                         currentIndex += batch.length;
                         updateProgress();
-                        setTimeout(translateNextBatch, 100);
+                        await new Promise(resolve => requestAnimationFrame(resolve));
+                        setTimeout(translateNextBatch, 50);
                     } catch (error) {
                         if (error.message.includes('429') || error.message.includes('Quota')) {
                             currentApiKeyIndex = (currentApiKeyIndex + 1) % apiKeys.length;
@@ -429,6 +485,7 @@
                             alert('Translation error: ' + error.message);
                             isTranslating = false;
                             stopBtn.textContent = 'Continue';
+                            clearInterval(timerInterval);
                         }
                     }
                 }
@@ -436,14 +493,37 @@
                 translateNextBatch();
             }
 
+            function displayMissingSubtitles() {
+                missingSubtitles.innerHTML = '';
+                const missingSubs = translatedSubs.filter(sub => !sub.translatedText || sub.translatedText.trim() === '');
+                
+                missingCount.textContent = `${missingSubs.length} missing subtitles`;
+
+                missingSubs.forEach(sub => {
+                    const item = document.createElement('div');
+                    item.className = 'missing-subtitle-item';
+                    item.innerHTML = `
+                        <div class="missing-subtitle-number">Line ${sub.number}</div>
+                        <div>Original: ${sub.text}</div>
+                        <div class="translation-input">Translation: <span id="missing-translation-${sub.number}" class="rtl-text"></span></div>
+                    `;
+                    missingSubtitles.appendChild(item);
+                });
+            }
+
             async function translateMissing() {
+                if (missingClickCount >= 4) {
+                    alert('Maximum retry attempts (4) reached. Please check manually or reset.');
+                    return;
+                }
+
                 const apiKeys = Array.from(document.querySelectorAll('.api-key-input'))
                     .map(input => input.value.trim())
                     .filter(key => key.length > 0);
                 const model = document.getElementById('modelSelect').value;
                 const targetLang = document.getElementById('targetLanguage').value;
                 const translationSettings = document.getElementById('translateSettings').value;
-                const batchSize = parseInt(batchSizeInput.value) || 50; // استفاده از مقدار ورودی کاربر برای خطوط جاافتاده
+                const batchSize = parseInt(missingBatchSizeInput.value) || 3;
 
                 const missingSubs = translatedSubs.filter(sub => !sub.translatedText || sub.translatedText.trim() === '');
                 if (missingSubs.length === 0) {
@@ -451,6 +531,10 @@
                     return;
                 }
 
+                missingClickCount++;
+                clickCount.textContent = `(${missingClickCount})`;
+
+                missingProgressText.style.display = 'block';
                 let missingIndex = 0;
 
                 while (missingIndex < missingSubs.length) {
@@ -459,7 +543,18 @@
 
                     try {
                         const textsToTranslate = batch.map(sub => `${sub.number}: ${sub.text}`).join('\n---\n');
-                        const translations = await translateWithGemini(textsToTranslate, targetLang, translationSettings, currentApiKey, model);
+                        let translations;
+                        try {
+                            translations = await translateWithGemini(textsToTranslate, targetLang, translationSettings, currentApiKey, model);
+                        } catch (apiError) {
+                            if (apiError.message.includes('429') || apiError.message.includes('Quota')) {
+                                currentApiKeyIndex = (currentApiKeyIndex + 1) % apiKeys.length;
+                                console.log('Switching to next API key for missing subs:', currentApiKeyIndex);
+                                translations = await translateWithGemini(textsToTranslate, targetLang, translationSettings, apiKeys[currentApiKeyIndex], model);
+                            } else {
+                                throw apiError;
+                            }
+                        }
                         const translatedArray = translations.split('\n---\n');
 
                         translatedArray.forEach(translation => {
@@ -474,23 +569,26 @@
                                     if (translatedElement) {
                                         translatedElement.textContent = translatedText;
                                     }
+                                    const missingElement = document.getElementById(`missing-translation-${number}`);
+                                    if (missingElement) {
+                                        missingElement.textContent = translatedText;
+                                    }
                                 }
                             }
                         });
 
                         missingIndex += batch.length;
+                        const percent = Math.round((missingIndex / missingSubs.length) * 100);
+                        missingProgressPercentage.textContent = percent;
                     } catch (error) {
-                        if (error.message.includes('429') || error.message.includes('Quota')) {
-                            currentApiKeyIndex = (currentApiKeyIndex + 1) % apiKeys.length;
-                            console.log('Switching to next API key for missing subs:', currentApiKeyIndex);
-                        } else {
-                            alert('Error translating missing subtitles: ' + error.message);
-                            break;
-                        }
+                        alert('Error translating missing subtitles: ' + error.message);
+                        break;
                     }
                 }
 
-                alert('Missing subtitles translated successfully.');
+                missingProgressText.style.display = 'none';
+                displayMissingSubtitles();
+                alert(`Missing subtitles translation attempt ${missingClickCount} completed. ${missingSubs.length} subtitles still missing.`);
             }
 
             translateMissingBtn.addEventListener('click', translateMissing);
@@ -515,7 +613,7 @@
                                 temperature: 0.7,
                                 topK: 40,
                                 topP: 0.95,
-                                maxOutputTokens: 1024,
+                                maxOutputTokens: 2048,
                             }
                         })
                     });
@@ -576,6 +674,7 @@
             toggleEditMode.addEventListener('click', () => {
                 editMode = !editMode;
                 const translatedItems = translatedSubtitles.querySelectorAll('.subtitle-item');
+                const missingItems = missingSubtitles.querySelectorAll('.missing-subtitle-item .translation-input span');
                 
                 translatedItems.forEach((item, index) => {
                     const textDiv = item.querySelector(`#translated-${index + 1}`);
@@ -592,6 +691,30 @@
                         textDiv.appendChild(textarea);
                     } else {
                         textDiv.innerHTML = translatedSubs[index].translatedText;
+                    }
+                });
+
+                missingItems.forEach((span, index) => {
+                    const sub = translatedSubs.find(s => s.number === index + 1);
+                    if (editMode) {
+                        const textarea = document.createElement('textarea');
+                        textarea.className = 'form-control rtl-text';
+                        textarea.value = span.textContent || '';
+                        textarea.addEventListener('input', (e) => {
+                            sub.translatedText = e.target.value;
+                            const translatedElement = document.getElementById(`translated-${sub.number}`);
+                            if (translatedElement) {
+                                translatedElement.textContent = e.target.value;
+                            }
+                            span.textContent = e.target.value;
+                        });
+                        span.replaceWith(textarea);
+                    } else {
+                        const newSpan = document.createElement('span');
+                        newSpan.id = `missing-translation-${sub.number}`;
+                        newSpan.className = 'rtl-text';
+                        newSpan.textContent = sub.translatedText || '';
+                        span.replaceWith(newSpan);
                     }
                 });
                 
